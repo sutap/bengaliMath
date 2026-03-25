@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { getClassData, getAllQuestions } from '../data/curriculum';
+import { getClassData, getAllQuestions } from '../services/db';
 import { toBengaliNumber, toBengaliPercent, bengaliOptionLabels } from '../utils/bengali';
 import { saveSession } from '../utils/storage';
 import type { PracticeSession, SessionQuestion } from '../types';

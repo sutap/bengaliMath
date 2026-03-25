@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { getClassData } from '../data/curriculum';
+import { getClassData } from '../services/db';
 import { toBengaliNumber } from '../utils/bengali';
 import type { Chapter, Topic } from '../types';
 

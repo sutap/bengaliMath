@@ -1,5 +1,5 @@
 import { getSessions } from '../utils/storage';
-import { getClassData } from '../data/curriculum';
+import { getClassData } from '../services/db';
 import { toBengaliNumber, toBengaliPercent } from '../utils/bengali';
 
 interface Props {

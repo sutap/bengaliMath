@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import ClassSelection from './components/ClassSelection';
 import Sidebar from './components/Sidebar';
 import Syllabus from './components/Syllabus';
@@ -7,12 +7,21 @@ import DoubtSolver from './components/DoubtSolver';
 import Progress from './components/Progress';
 import History from './components/History';
 import { getSelectedClass, setSelectedClass, getTheme, setTheme } from './utils/storage';
+import { loadCurriculum } from './services/db';
 import type { NavSection } from './types';
 
 export default function App() {
   const [selectedClass, setSelectedClassState] = useState<number | null>(getSelectedClass);
   const [activeSection, setActiveSection] = useState<NavSection>('syllabus');
   const [darkMode, setDarkMode] = useState(getTheme() === 'dark');
+  const [dbReady, setDbReady] = useState(false);
+  const [dbError, setDbError] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadCurriculum()
+      .then(() => setDbReady(true))
+      .catch((err: Error) => setDbError(err.message));
+  }, []);
 
   function handleClassSelect(classId: number) {
     setSelectedClass(classId);
@@ -27,6 +36,29 @@ export default function App() {
     const newMode = !darkMode;
     setDarkMode(newMode);
     setTheme(newMode ? 'dark' : 'light');
+  }
+
+  if (dbError) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: "'Hind Siliguri', sans-serif", padding: '2rem', textAlign: 'center' }}>
+        <div>
+          <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>⚠️</div>
+          <p style={{ fontWeight: 600, marginBottom: '0.5rem' }}>ডেটাবেস সংযোগ ব্যর্থ হয়েছে</p>
+          <p style={{ fontSize: '0.85rem', color: '#666' }}>{dbError}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!dbReady) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: "'Hind Siliguri', sans-serif" }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>📚</div>
+          <p>পাঠ্যক্রম লোড হচ্ছে…</p>
+        </div>
+      </div>
+    );
   }
 
   if (!selectedClass) {
