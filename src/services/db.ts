@@ -1,92 +1,94 @@
 /**
- * db.ts — Supabase-backed curriculum service.
+ * db.ts — IndexedDB-backed curriculum service (via Dexie).
  *
- * Loads all curriculum data once from Supabase and caches it in memory.
- * After `loadCurriculum()` resolves, the synchronous helpers (getClassData,
- * getAllQuestions, etc.) work identically to the old curriculum.ts exports,
- * so existing components need no changes.
+ * On first visit the curriculum is seeded from the bundled curriculum.ts into
+ * the browser's IndexedDB.  Every subsequent visit reads straight from the DB.
+ * After loadCurriculum() resolves, the synchronous helpers below work
+ * identically to the old curriculum.ts, so existing components need no changes.
  */
 
-import { supabase } from '../lib/supabase';
+import { localDb } from '../lib/localDb';
+import { curriculum as staticCurriculum } from '../data/curriculum';
 import type { ClassData, Chapter, Topic, Question } from '../types';
 
-// ── In-memory cache ──────────────────────────────────────────────────────────
+// ── In-memory cache + in-flight promise (prevents double-load in StrictMode) ──
 let cache: ClassData[] | null = null;
+let loading: Promise<ClassData[]> | null = null;
 
-// ── Raw DB row types ─────────────────────────────────────────────────────────
-interface ChapterRow {
-  id: string;
-  class_id: number;
-  name: string;
-  description: string;
-}
+// ── Seed helpers ─────────────────────────────────────────────────────────────
+async function seedIfEmpty(): Promise<void> {
+  const count = await localDb.chapters.count();
+  if (count > 0) return; // already seeded
 
-interface TopicRow {
-  id: string;
-  chapter_id: string;
-  name: string;
-  description: string;
-}
+  const chapters = [];
+  const topics = [];
+  const questions = [];
 
-interface QuestionRow {
-  id: string;
-  topic_id: string;
-  type: 'mcq' | 'short';
-  text: string;
-  options: string[] | null;
-  answer: string;
-  solution: string;
-  difficulty: 'easy' | 'medium' | 'hard';
-}
-
-// ── Load & cache ─────────────────────────────────────────────────────────────
-export async function loadCurriculum(): Promise<ClassData[]> {
-  if (cache) return cache;
-
-  const [{ data: chapterRows, error: ce }, { data: topicRows, error: te }, { data: questionRows, error: qe }] =
-    await Promise.all([
-      supabase.from('chapters').select('*').order('class_id').order('id'),
-      supabase.from('topics').select('*').order('id'),
-      supabase.from('questions').select('*').order('id'),
-    ]);
-
-  if (ce || te || qe) {
-    throw new Error(`DB load failed: ${ce?.message ?? te?.message ?? qe?.message}`);
+  for (const cls of staticCurriculum) {
+    for (const ch of cls.chapters) {
+      chapters.push({ id: ch.id, class_id: cls.id, name: ch.name, description: ch.description });
+      for (const tp of ch.topics) {
+        topics.push({ id: tp.id, chapter_id: ch.id, name: tp.name, description: tp.description });
+        for (const q of tp.questions) {
+          questions.push({
+            id: q.id,
+            topic_id: tp.id,
+            type: q.type,
+            text: q.text,
+            options: q.options ?? null,
+            answer: String(q.answer),
+            solution: q.solution,
+            difficulty: q.difficulty,
+          });
+        }
+      }
+    }
   }
 
-  // Index topics and questions for O(1) lookup
-  const topicsByChapter = new Map<string, TopicRow[]>();
-  for (const t of (topicRows as TopicRow[])) {
+  await localDb.transaction('rw', localDb.chapters, localDb.topics, localDb.questions, async () => {
+    await localDb.chapters.bulkPut(chapters);
+    await localDb.topics.bulkPut(topics);
+    await localDb.questions.bulkPut(questions);
+  });
+
+  console.log(`[DB] Seeded: ${chapters.length} chapters, ${topics.length} topics, ${questions.length} questions`);
+}
+
+// ── Build ClassData[] from DB rows ────────────────────────────────────────────
+async function buildCache(): Promise<ClassData[]> {
+  const [chapterRows, topicRows, questionRows] = await Promise.all([
+    localDb.chapters.orderBy('id').toArray(),
+    localDb.topics.orderBy('id').toArray(),
+    localDb.questions.orderBy('id').toArray(),
+  ]);
+
+  const topicsByChapter = new Map<string, typeof topicRows>();
+  for (const t of topicRows) {
     const arr = topicsByChapter.get(t.chapter_id) ?? [];
     arr.push(t);
     topicsByChapter.set(t.chapter_id, arr);
   }
 
-  const questionsByTopic = new Map<string, QuestionRow[]>();
-  for (const q of (questionRows as QuestionRow[])) {
+  const questionsByTopic = new Map<string, typeof questionRows>();
+  for (const q of questionRows) {
     const arr = questionsByTopic.get(q.topic_id) ?? [];
     arr.push(q);
     questionsByTopic.set(q.topic_id, arr);
   }
 
-  // Group chapters by class_id
-  const classBuckets = new Map<number, ChapterRow[]>();
-  for (const c of (chapterRows as ChapterRow[])) {
+  const classBuckets = new Map<number, typeof chapterRows>();
+  for (const c of chapterRows) {
     const arr = classBuckets.get(c.class_id) ?? [];
     arr.push(c);
     classBuckets.set(c.class_id, arr);
   }
 
   const CLASS_NAMES: Record<number, string> = {
-    5: 'পঞ্চম শ্রেণী',
-    6: 'ষষ্ঠ শ্রেণী',
-    7: 'সপ্তম শ্রেণী',
-    8: 'অষ্টম শ্রেণী',
-    9: 'নবম শ্রেণী',
-    10: 'দশম শ্রেণী',
+    5: 'পঞ্চম শ্রেণী', 6: 'ষষ্ঠ শ্রেণী', 7: 'সপ্তম শ্রেণী',
+    8: 'অষ্টম শ্রেণী', 9: 'নবম শ্রেণী', 10: 'দশম শ্রেণী',
   };
 
-  cache = Array.from(classBuckets.entries())
+  return Array.from(classBuckets.entries())
     .sort(([a], [b]) => a - b)
     .map(([classId, chapters]): ClassData => ({
       id: classId,
@@ -112,8 +114,18 @@ export async function loadCurriculum(): Promise<ClassData[]> {
         })),
       })),
     }));
+}
 
-  return cache;
+// ── Public: load once ─────────────────────────────────────────────────────────
+export function loadCurriculum(): Promise<ClassData[]> {
+  if (cache) return Promise.resolve(cache);
+  if (loading) return loading;
+  loading = (async () => {
+    await seedIfEmpty();
+    cache = await buildCache();
+    return cache;
+  })();
+  return loading;
 }
 
 // ── Synchronous helpers (same API as old curriculum.ts) ──────────────────────
